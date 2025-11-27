@@ -13,7 +13,7 @@ const Conversation: any = ConversationModel;
 const Message: any = MessageModel;
 const User: any = UserModel;
 
-const PORT = Number(process.env.SOCKET_PORT || 4000);
+const PORT = Number(process.env.PORT);
 
 async function start() {
   await dbConnect();
