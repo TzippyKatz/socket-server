@@ -1,0 +1,18 @@
+{
+  "name": "socket-server",
+  "version": "1.0.0",
+  "main": "src/socket/server.ts",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/socket/server.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "mongoose": "^8.0.0",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.3.2"
+  }
+}
