@@ -1,5 +1,4 @@
-import mongoose, { Schema, model } from "mongoose";
-
+import { Schema, model, models } from "mongoose";
 const MessageSchema = new Schema(
   {
     conversation_id: {
@@ -28,9 +27,11 @@ const MessageSchema = new Schema(
   {
     timestamps: {
       createdAt: true,
-      updatedAt: false,
+      updatedAt: false, 
     },
   }
 );
 
-export default mongoose.models.Message || model("Message", MessageSchema);
+const Message = models.Message || model("Message", MessageSchema);
+
+export default Message;

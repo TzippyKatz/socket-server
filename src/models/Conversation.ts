@@ -1,4 +1,4 @@
-import mongoose, { Schema, model } from "mongoose";
+import { Schema, model, models } from "mongoose";
 
 const ConversationSchema = new Schema(
   {
@@ -16,10 +16,18 @@ const ConversationSchema = new Schema(
     lastMessageAt: {
       type: Date,
     },
+    unreadByUser: {
+      type: Map,
+      of: Number,
+      default: {},
+    },
   },
   {
-    timestamps: true, 
+    timestamps: true,
   }
 );
 
-export default mongoose.models.Conversation || model("Conversation", ConversationSchema);
+const Conversation =
+  models.Conversation || model("Conversation", ConversationSchema);
+
+export default Conversation;

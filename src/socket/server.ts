@@ -1,280 +1,426 @@
-import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
-
-
-import { createServer } from "http";
+import express from "express";
+import http from "http";
 import { Server } from "socket.io";
-
+import cors from "cors";
 import { dbConnect } from "../../src/lib/mongoose";
-import ConversationModel from "../models/Conversation";
-import MessageModel from "../models/Message";
-import UserModel from "../models/User";
-const Conversation: any = ConversationModel;
-const Message: any = MessageModel;
-const User: any = UserModel;
+import Conversation from "../../src/models/Conversation";
+import Message from "../../src/models/Message";
+import User from "../../src/models/User";
 
-const PORT = Number(process.env.PORT);
+const ConversationModel = Conversation as any;
+const MessageModel = Message as any;
+const UserModel = User as any;
 
-async function start() {
-  await dbConnect();
-  console.log("Mongo connected (socket server)");
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-  const httpServer = createServer();
+const server = http.createServer(app);
 
-  const io = new Server(httpServer, {
-    cors: {
-      origin: "http://localhost:3000",
-      methods: ["GET", "POST"],
-      credentials: true,
-    },
-  });
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
 
-  io.on("connection", (socket) => {
-    console.log("Socket connected:", socket.id);
-    socket.on(
-      "joinConversation",
-      (payload: { conversationId: string; userUid: string }) => {
-        const { conversationId } = payload;
-        socket.join(conversationId);
-        console.log("Socket joined room", conversationId);
-      }
-    );
-    socket.on(
-      "startConversation",
-      async (
-        payload: { currentUserUid: string; otherUserUid: string },
-        callback?: (data: any) => void
-      ) => {
-        try {
-          const { currentUserUid, otherUserUid } = payload;
+function getUnreadForUser(unreadByUser: any, uid: string): number {
+  if (!unreadByUser) return 0;
 
-          if (!currentUserUid || !otherUserUid) {
-            callback?.({
-              ok: false,
-              error: "currentUserUid and otherUserUid are required",
-            });
-            return;
-          }
+  if (typeof unreadByUser.get === "function") {
+    return Number(unreadByUser.get(uid) ?? 0);
+  }
 
-          const participants = [currentUserUid, otherUserUid].sort();
+  return Number((unreadByUser as Record<string, number>)[uid] ?? 0);
+}
 
-          let conversation = await Conversation.findOne({
-            participants,
-          }).lean();
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
+  socket.on(
+    "startConversation",
+    async (
+      payload: { currentUserUid?: string; otherUserUid?: string },
+      callback?: (res: { ok: boolean; conversation?: any; error?: string }) => void
+    ) => {
+      try {
+        const { currentUserUid, otherUserUid } = payload || {};
 
-          if (!conversation) {
-            const created = await Conversation.create({
-              participants,
-              lastMessageText: "",
-              lastMessageAt: null,
-            });
-            conversation = created.toObject();
-          }
-
-          const otherUser = await User.findOne({
-            firebase_uid: otherUserUid,
-          }).lean();
-
-          const data = {
-            ok: true,
-            conversation: {
-              _id: conversation._id,
-              participants: conversation.participants,
-              lastMessageText: conversation.lastMessageText,
-              lastMessageAt: conversation.lastMessageAt,
-            },
-            otherUser: otherUser
-              ? {
-                  firebase_uid: otherUser.firebase_uid,
-                  username: otherUser.username,
-                  name: otherUser.name,
-                  profil_url: otherUser.profil_url,
-                }
-              : null,
-          };
-
-          callback?.(data);
-        } catch (err) {
-          console.error("startConversation error:", err);
-          callback?.({ ok: false, error: "Failed to start conversation" });
+        if (!currentUserUid || !otherUserUid) {
+          callback?.({
+            ok: false,
+            error: "currentUserUid and otherUserUid are required",
+          });
+          return;
         }
+
+        await dbConnect();
+
+        const participants = [currentUserUid, otherUserUid].sort();
+        let conversation = await ConversationModel.findOne({
+          participants: { $all: participants, $size: 2 },
+        } as any).lean();
+
+        if (!conversation) {
+          const created = await ConversationModel.create({
+            participants,
+            lastMessageText: "",
+            lastMessageAt: null,
+            unreadByUser: {},
+          } as any);
+          conversation = created.toObject();
+        }
+
+        callback?.({ ok: true, conversation });
+      } catch (err) {
+        console.error("startConversation error:", err);
+        callback?.({
+          ok: false,
+          error: "Failed to start conversation",
+        });
       }
-    );
-    socket.on(
-      "getConversations",
-      async (
-        payload: { userUid: string },
-        callback?: (data: any) => void
-      ) => {
-        try {
-          const { userUid } = payload;
-          if (!userUid) {
-            callback?.({ ok: false, error: "userUid is required" });
-            return;
-          }
+    }
+  );
+  socket.on(
+    "getConversations",
+    async (
+      payload: { userUid?: string },
+      callback?: (res: {
+        ok: boolean;
+        conversations?: any[];
+        error?: string;
+      }) => void
+    ) => {
+      try {
+        const { userUid } = payload || {};
+        if (!userUid) {
+          callback?.({ ok: false, error: "userUid is required" });
+          return;
+        }
 
-          const conversations = await Conversation.find({
-            participants: userUid,
-          })
-            .sort({ lastMessageAt: -1, updatedAt: -1 })
-            .lean();
+        await dbConnect();
 
-          const otherUids = Array.from(
-            new Set(
-              conversations
-                .map((c: any) =>
-                  (c.participants as string[]).find((p) => p !== userUid)
-                )
-                .filter((x): x is string => !!x)
-            )
-          );
+        const conversations = await ConversationModel.find({
+          participants: userUid,
+        } as any)
+          .sort({ lastMessageAt: -1, updatedAt: -1 })
+          .lean();
 
-          const otherUsers = await User.find({
-            firebase_uid: { $in: otherUids },
-          }).lean();
+        const enriched = await Promise.all(
+          conversations.map(async (conv: any) => {
+            const participants: string[] = conv.participants || [];
+            const otherUid =
+              participants.find((p) => p !== userUid) || userUid;
 
-          const otherUsersByUid = new Map(
-            otherUsers.map((u: any) => [u.firebase_uid, u])
-          );
+            const otherUserDoc = await UserModel.findOne({
+              firebase_uid: otherUid,
+            }).lean();
 
-          const result = conversations.map((c: any) => {
-            const otherUid = (c.participants as string[]).find(
-              (p) => p !== userUid
-            );
-            const otherUser: any = otherUid
-              ? otherUsersByUid.get(otherUid)
-              : null;
+            const unread = getUnreadForUser(conv.unreadByUser, userUid);
 
             return {
-              _id: c._id,
-              participants: c.participants,
-              lastMessageText: c.lastMessageText,
-              lastMessageAt: c.lastMessageAt,
-              otherUser: otherUser
+              _id: conv._id.toString(),
+              lastMessageText: conv.lastMessageText || "",
+              lastMessageAt: conv.lastMessageAt || conv.updatedAt || null,
+              unread_count: unread,
+              unreadByUser: conv.unreadByUser || {},
+              otherUser: otherUserDoc
                 ? {
-                    firebase_uid: otherUser.firebase_uid,
-                    username: otherUser.username,
-                    name: otherUser.name,
-                    profil_url: otherUser.profil_url,
+                    firebase_uid: otherUserDoc.firebase_uid,
+                    username: otherUserDoc.username,
+                    name: otherUserDoc.name,
+                    profil_url: otherUserDoc.profil_url,
                   }
                 : null,
             };
-          });
-
-          callback?.({ ok: true, conversations: result });
-        } catch (err) {
-          console.error("getConversations error:", err);
-          callback?.({ ok: false, error: "Failed to load conversations" });
-        }
-      }
-    );
-    socket.on(
-      "getMessages",
-      async (
-        payload: { conversationId: string },
-        callback?: (data: any) => void
-      ) => {
-        try {
-          const { conversationId } = payload;
-          if (!conversationId) {
-            callback?.({ ok: false, error: "conversationId is required" });
-            return;
-          }
-
-          const messages = await Message.find({
-            conversation_id: conversationId,
           })
-            .sort({ createdAt: 1 })
-            .lean();
+        );
 
-          callback?.({ ok: true, messages });
-        } catch (err) {
-          console.error("getMessages error:", err);
-          callback?.({ ok: false, error: "Failed to load messages" });
-        }
+        callback?.({ ok: true, conversations: enriched });
+      } catch (err) {
+        console.error("getConversations error:", err);
+        callback?.({
+          ok: false,
+          error: "Failed to load conversations",
+        });
       }
-    );
-    socket.on(
-      "sendMessage",
-      async (
-        payload: { conversationId: string; senderUid: string; text: string },
-        callback?: (data: any) => void
-      ) => {
-        try {
-          const { conversationId, senderUid, text } = payload;
-
-          if (!conversationId || !senderUid || !text) {
-            callback?.({
-              ok: false,
-              error: "conversationId, senderUid and text are required",
-            });
-            return;
-          }
-
-          const conversation = await Conversation.findById(
-            conversationId
-          ).lean();
-
-          if (!conversation) {
-            callback?.({ ok: false, error: "Conversation not found" });
-            return;
-          }
-
-          const participants = conversation.participants as string[];
-          const recipientUid = participants.find((p) => p !== senderUid);
-
-          if (!recipientUid) {
-            callback?.({
-              ok: false,
-              error: "senderUid must be one of the participants",
-            });
-            return;
-          }
-
-          const newMessage = await Message.create({
-            conversation_id: conversationId,
-            sender_uid: senderUid,
-            recipient_uid: recipientUid,
-            text,
-          });
-
-          await Conversation.findByIdAndUpdate(conversationId, {
-            lastMessageText: text,
-            lastMessageAt: new Date(),
-          });
-
-          const messageData = {
-            _id: newMessage._id,
-            conversation_id: newMessage.conversation_id,
-            sender_uid: newMessage.sender_uid,
-            recipient_uid: newMessage.recipient_uid,
-            text: newMessage.text,
-            createdAt: newMessage.createdAt,
-          };
-          io.to(conversationId).emit("message", {
-            conversationId,
-            message: messageData,
-          });
-
-          callback?.({ ok: true, message: messageData });
-        } catch (err) {
-          console.error("sendMessage error:", err);
-          callback?.({ ok: false, error: "Failed to send message" });
-        }
+    }
+  );
+  socket.on(
+    "joinConversation",
+    (payload: { conversationId?: string; userUid?: string }) => {
+      const { conversationId } = payload || {};
+      if (!conversationId) {
+        console.warn("joinConversation without conversationId");
+        return;
       }
-    );
+      console.log(
+        Socket ${socket.id} joining room conversation ${conversationId}
+      );
+      socket.join(conversationId);
+    }
+  );
+  socket.on(
+    "getMessages",
+    async (
+      payload: { conversationId?: string },
+      callback?: (res: {
+        ok: boolean;
+        messages?: any[];
+        error?: string;
+      }) => void
+    ) => {
+      try {
+        const { conversationId } = payload || {};
+        if (!conversationId) {
+          callback?.({
+            ok: false,
+            error: "conversationId is required",
+          });
+          return;
+        }
 
-    socket.on("disconnect", () => {
-      console.log("Socket disconnected:", socket.id);
-    });
+        await dbConnect();
+
+        const msgs = await MessageModel.find({
+          conversation_id: conversationId,
+        } as any)
+          .sort({ createdAt: 1 })
+          .lean();
+
+        const mapped = msgs.map((m: any) => ({
+          _id: m._id.toString(),
+          conversation_id: m.conversation_id.toString(),
+          sender_uid: m.sender_uid,
+          recipient_uid: m.recipient_uid,
+          text: m.text,
+          createdAt: m.createdAt,
+        }));
+
+        callback?.({ ok: true, messages: mapped });
+      } catch (err) {
+        console.error("getMessages error:", err);
+        callback?.({
+          ok: false,
+          error: "Failed to load messages",
+        });
+      }
+    }
+  );
+  socket.on(
+    "sendMessage",
+    async (
+      payload: {
+        conversationId?: string;
+        senderUid?: string;
+        text?: string;
+      },
+      callback?: (res: { ok: boolean; message?: any; error?: string }) => void
+    ) => {
+      try {
+        const { conversationId, senderUid, text } = payload || {};
+        if (!conversationId || !senderUid || !text?.trim()) {
+          callback?.({
+            ok: false,
+            error: "conversationId, senderUid and text are required",
+          });
+          return;
+        }
+
+        await dbConnect();
+
+        const conv = await ConversationModel.findById(
+          conversationId as any
+        );
+        if (!conv) {
+          callback?.({
+            ok: false,
+            error: "Conversation not found",
+          });
+          return;
+        }
+
+        const participants: string[] = (conv as any).participants || [];
+        const recipientUid =
+          participants.find((p) => p !== senderUid) || senderUid;
+
+        const createdAt = new Date();
+
+        const msgDoc = await MessageModel.create({
+          conversation_id: conversationId,
+          sender_uid: senderUid,
+          recipient_uid: recipientUid,
+          text: text.trim(),
+          createdAt,
+        } as any);
+        const unreadByUser: Map<string, number> =
+          (conv as any).unreadByUser || new Map();
+        for (const p of participants) {
+          if (p === senderUid) continue;
+          const current = getUnreadForUser(unreadByUser, p);
+          (unreadByUser as any).set
+            ? (unreadByUser as any).set(p, current + 1)
+            : ((unreadByUser as any)[p] = current + 1);
+        }
+
+        (conv as any).lastMessageText = text.trim();
+        (conv as any).lastMessageAt = createdAt;
+        (conv as any).unreadByUser = unreadByUser;
+        await conv.save();
+
+        const messagePayload = {
+          _id: msgDoc._id.toString(),
+          conversation_id: conversationId,
+          sender_uid: senderUid,
+          recipient_uid: recipientUid,
+          text: text.trim(),
+          createdAt,
+        };
+
+        io.to(conversationId).emit("message", {
+          conversationId,
+          message: messagePayload,
+        });
+
+        callback?.({ ok: true, message: messagePayload });
+      } catch (err) {
+        console.error("sendMessage error:", err);
+        callback?.({
+          ok: false,
+          error: "Failed to send message",
+        });
+      }
+    }
+  );
+  socket.on(
+    "deleteConversation",
+    async (
+      { conversationId, userUid }: { conversationId?: string; userUid?: string },
+      callback: (res: { ok: boolean; error?: string }) => void
+    ) => {
+      try {
+        if (!conversationId || !userUid) {
+          callback({ ok: false, error: "Missing data" });
+          return;
+        }
+
+        await dbConnect();
+
+        await ConversationModel.deleteOne({
+          _id: conversationId,
+          participants: { $in: [userUid] },
+        });
+
+        await MessageModel.deleteMany({ conversation_id: conversationId });
+
+        callback({ ok: true });
+      } catch (e: any) {
+        console.error("deleteConversation error:", e);
+        callback({ ok: false, error: e.message });
+      }
+    }
+  );
+  socket.on(
+    "deleteMessage",
+    async (
+      { messageId, userUid }: { messageId: string; userUid: string },
+      callback: (res: { ok: boolean; error?: string }) => void
+    ) => {
+      try {
+        await dbConnect();
+
+        const msg: any = await MessageModel.findById(messageId as any);
+        if (!msg) {
+          return callback({ ok: true });
+        }
+
+        if (msg.sender_uid !== userUid) {
+          return callback({ ok: false, error: "Not allowed" });
+        }
+
+        await MessageModel.deleteOne({ _id: messageId });
+
+        io.to(String(msg.conversation_id)).emit("messageDeleted", {
+          messageId,
+        });
+
+        callback({ ok: true });
+      } catch (e: any) {
+        console.error("deleteMessage error:", e);
+        callback({ ok: false, error: e.message });
+      }
+    }
+  );
+
+  socket.on(
+    "editMessage",
+    async (
+      {
+        messageId,
+        userUid,
+        text,
+      }: { messageId: string; userUid: string; text: string },
+      callback: (res: { ok: boolean; message?: any; error?: string }) => void
+    ) => {
+      try {
+        await dbConnect();
+
+        const msg: any = await MessageModel.findById(messageId as any);
+        if (!msg) return callback({ ok: false, error: "Message not found" });
+
+        if (msg.sender_uid !== userUid) {
+          return callback({ ok: false, error: "Not allowed" });
+        }
+
+        msg.text = text;
+        await msg.save();
+
+        const plain = msg.toObject();
+        io.to(String(msg.conversation_id)).emit("messageEdited", {
+          message: plain,
+        });
+
+        callback({ ok: true, message: plain });
+      } catch (e: any) {
+        console.error("editMessage error:", e);
+        callback({ ok: false, error: e.message });
+      }
+    }
+  );
+  socket.on(
+    "markConversationRead",
+    async (payload: { conversationId?: string; userUid?: string }) => {
+      try {
+        const { conversationId, userUid } = payload || {};
+        if (!conversationId || !userUid) return;
+
+        await dbConnect();
+
+        const conv = await ConversationModel.findById(
+          conversationId as any
+        );
+        if (!conv) return;
+
+        const unreadByUser: Map<string, number> =
+          (conv as any).unreadByUser || new Map();
+
+        (unreadByUser as any).set
+          ? (unreadByUser as any).set(userUid, 0)
+          : ((unreadByUser as any)[userUid] = 0);
+
+        (conv as any).unreadByUser = unreadByUser;
+        await conv.save();
+      } catch (err) {
+        console.error("markConversationRead error:", err);
+      }
+    }
+  );
+  socket.on("disconnect", () => {
+    console.log("Socket disconnected:", socket.id);
   });
+});
 
-  httpServer.listen(PORT, () => {
-    console.log(`Socket.io server listening on port ${PORT}`);
-  });
-}
+const PORT = 4000;
 
-start().catch((err) => {
-  console.error("Socket server failed to start:", err);
-  process.exit(1);
+server.listen(PORT, () => {
+  console.log("Socket.io server running on port", PORT);
 });
