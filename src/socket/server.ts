@@ -125,11 +125,11 @@ io.on("connection", (socket) => {
               unreadByUser: conv.unreadByUser || {},
               otherUser: otherUserDoc
                 ? {
-                    firebase_uid: otherUserDoc.firebase_uid,
-                    username: otherUserDoc.username,
-                    name: otherUserDoc.name,
-                    profil_url: otherUserDoc.profil_url,
-                  }
+                  firebase_uid: otherUserDoc.firebase_uid,
+                  username: otherUserDoc.username,
+                  name: otherUserDoc.name,
+                  profil_url: otherUserDoc.profil_url,
+                }
                 : null,
             };
           })
@@ -154,7 +154,7 @@ io.on("connection", (socket) => {
         return;
       }
       console.log(
-        Socket ${socket.id} joining room conversation ${conversationId}
+        `Socket ${socket.id} joining room conversation ${conversationId}`
       );
       socket.join(conversationId);
     }
