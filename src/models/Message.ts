@@ -1,4 +1,5 @@
-import { Schema, model, models } from "mongoose";
+import mongoose, { Schema, model } from "mongoose";
+
 const MessageSchema = new Schema(
   {
     conversation_id: {
@@ -32,6 +33,8 @@ const MessageSchema = new Schema(
   }
 );
 
-const Message = models.Message || model("Message", MessageSchema);
+const Message =
+  mongoose.models.Message ||
+  model("Conversation", MessageSchema);
 
 export default Message;
