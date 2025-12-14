@@ -19,8 +19,13 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
+    origin: [
+      "https://museup.blog",
+      "https://www.museup.blog",
+      "https://muse-up.vercel.app",
+      "http://localhost:3000",
+    ],
+    credentials: true,
   },
 });
 
